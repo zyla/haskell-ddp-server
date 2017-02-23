@@ -1,6 +1,7 @@
 {-# LANGUAGE TemplateHaskell, GeneralizedNewtypeDeriving, LambdaCase #-}
 module Network.DDP.Protocol where
 
+import Control.Monad
 import Data.Text (Text)
 import qualified Data.HashMap.Strict as HM
 import Data.Aeson hiding (Result)
@@ -15,8 +16,21 @@ newtype SubId = SubId { unSubId :: Text }
 newtype MethodCallId = MethodCallId { unMethodCallId :: Text }
   deriving (Eq, Show, Ord, ToJSON, FromJSON)
 
-newtype Error = Error { unError :: Text }
+newtype SessionId = SessionId { unSessionId :: Text }
   deriving (Eq, Show, Ord, ToJSON, FromJSON)
+
+newtype ProtocolVersion = ProtocolVersion { unProtocolVersion :: Text }
+  deriving (Eq, Show, Ord, ToJSON, FromJSON)
+
+data Error = Error
+  { error_error :: Text
+  , error_reason :: Maybe Text
+  , error_message :: Maybe Text
+  , error_errorType :: Maybe Text
+  } deriving (Eq, Show, Ord)
+
+deriveFromJSON ''Error
+deriveToJSON ''Error
 
 type CollectionName = Text
 type Id = Text
@@ -69,7 +83,7 @@ data Sub = Sub
 deriveFromJSON ''Sub
 
 data Unsub = Unsub
-  { ubsub_id :: SubId
+  { unsub_id :: SubId
   } deriving (Eq, Show)
 
 deriveFromJSON ''Unsub
@@ -79,7 +93,7 @@ data Method = Method
     -- ^ method name
   , method_params :: [Value]
   , method_id :: MethodCallId
-  , randomSeed :: Maybe Value
+  , method_randomSeed :: Maybe Value
   } deriving (Eq, Show)
 
 deriveFromJSON ''Method
@@ -97,25 +111,63 @@ data Updated = Updated
 
 deriveToJSON ''Updated
 
+data Ping = Ping
+  { ping_id :: Text
+  } deriving (Eq, Show)
+
+deriveFromJSON ''Ping
+deriveToJSON ''Ping
+
+data Pong = Pong
+  { pong_id :: Text
+  } deriving (Eq, Show)
+
+deriveFromJSON ''Pong
+deriveToJSON ''Pong
+
+data Connected = Connected
+  { connected_session :: SessionId
+  } deriving (Eq, Show)
+
+deriveToJSON ''Connected
+
+data Failed = Failed
+  { failed_version :: ProtocolVersion
+  } deriving (Eq, Show)
+
+deriveToJSON ''Failed
+
 data ServerMessage =
-    S_Nosub Nosub
+  -- Handshake
+    S_Connected Connected
+  | S_Failed Failed
+  -- Heartbeats
+  | S_Ping Ping
+  | S_Pong Pong
+  -- Data management (TODO: addedBefore, movedBefore)
+  | S_Nosub Nosub
   | S_Added Added
   | S_Changed Changed
   | S_Removed Removed
   | S_Ready Ready
-  -- TODO addedBefore, movedBefore
+  -- RPC
   | S_Result Result
   | S_Updated Updated
+  deriving (Eq, Show)
 
 instance ToJSON ServerMessage where
   toJSON = \case
-      S_Nosub   val -> msg "nosub"   val
-      S_Added   val -> msg "added"   val
-      S_Removed val -> msg "removed" val
-      S_Changed val -> msg "changed" val
-      S_Ready   val -> msg "ready"   val
-      S_Result  val -> msg "result"  val
-      S_Updated val -> msg "updated" val
+      S_Connected val -> msg "connected" val
+      S_Failed    val -> msg "failed"    val
+      S_Ping      val -> msg "ping"      val
+      S_Pong      val -> msg "pong"      val
+      S_Nosub     val -> msg "nosub"     val
+      S_Added     val -> msg "added"     val
+      S_Removed   val -> msg "removed"   val
+      S_Changed   val -> msg "changed"   val
+      S_Ready     val -> msg "ready"     val
+      S_Result    val -> msg "result"    val
+      S_Updated   val -> msg "updated"   val
 
     where
       msg :: ToJSON a => Text -> a -> Value
@@ -125,10 +177,37 @@ instance ToJSON ServerMessage where
             object ("msg" .= name : HM.toList obj)
           _ -> error "Messages should be serialized to JSON objects"
 
+data Connect = Connect
+  { connect_session :: Maybe SessionId
+  , connect_version :: ProtocolVersion
+  , connect_support :: [ProtocolVersion]
+  } deriving (Eq, Show)
+
+deriveFromJSON ''Connect
+
 data ClientMessage =
-    C_Sub Sub
+  -- Handshake
+    C_Connect Connect
+  -- Heartbeats
+  | C_Ping Ping
+  | C_Pong Pong
+  -- Data management
+  | C_Sub Sub
   | C_Unsub Unsub
+  -- RPC
   | C_Method Method
+  deriving (Eq, Show)
 
 instance FromJSON ClientMessage where
-  parseJSON (Object obj) = _
+  parseJSON (Object obj) = do
+    typ <- obj .: "msg"
+    case typ :: Text of
+      "connect" -> C_Connect <$> parseJSON (Object obj)
+      "ping"    -> C_Ping    <$> parseJSON (Object obj)
+      "pong"    -> C_Pong    <$> parseJSON (Object obj)
+      "sub"     -> C_Sub     <$> parseJSON (Object obj)
+      "unsub"   -> C_Unsub   <$> parseJSON (Object obj)
+      "method"  -> C_Method  <$> parseJSON (Object obj)
+      _         -> mzero
+
+  parseJSON _ = mzero
