@@ -58,6 +58,11 @@ processMessage :: Connection s -> ClientMessage -> IO ()
 processMessage (Connection Config{callMethod,subscribe,connect} stateVar sendMessage) msg = do
   -- FIXME: RACE CONDITION: Two threads may C_Connect at the same time.
   state <- atomically $ readTVar stateVar
+
+  let respondError message =
+        -- TODO: include offending message
+        sendMessage (S_Error (ErrorMsg message Nothing))
+
   case state of
     New -> case msg of
       C_Connect{} -> do
@@ -67,15 +72,11 @@ processMessage (Connection Config{callMethod,subscribe,connect} stateVar sendMes
         sendMessage $ S_Connected $ Protocol.Connected $ SessionId ""
         atomically $ writeTVar stateVar $ Connected subsVar appState
 
-      _ ->
-        -- TODO: return "not connected" error
-        pass
+      _ -> respondError "Not yet connected"
 
     Connected subsVar appState -> case msg of
 
-      C_Connect{} ->
-        -- TODO error: already connected
-        pass
+      C_Connect{} -> respondError "Already connected"
 
       C_Ping (Ping id) ->
         sendMessage (S_Pong (Pong id))
@@ -107,9 +108,7 @@ processMessage (Connection Config{callMethod,subscribe,connect} stateVar sendMes
 
         case m_unsubscribe of
           Nothing ->
-            -- The protocol doesn't have a reply to unsub message
-            -- Maybe log a warning?
-            pass
+            respondError "Subscription ID not found"
 
           Just unsubscribe ->
             unsubscribe
@@ -117,6 +116,7 @@ processMessage (Connection Config{callMethod,subscribe,connect} stateVar sendMes
       C_Method Method{method_method,method_params,method_id} -> do
         result <- callMethod appState method_method method_params
         sendMessage $ S_Result $ Result method_id result
+
 
 debugConfig = Config connect callMethod subscribe
   where

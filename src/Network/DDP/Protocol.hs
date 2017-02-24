@@ -138,6 +138,13 @@ data Failed = Failed
 
 deriveToJSON ''Failed
 
+data ErrorMsg = ErrorMsg
+  { errormsg_reason :: Text
+  , errormsg_offendingMessage :: Maybe Value
+  } deriving (Eq, Show)
+
+deriveToJSON ''ErrorMsg
+
 data ServerMessage =
   -- Handshake
     S_Connected Connected
@@ -154,6 +161,8 @@ data ServerMessage =
   -- RPC
   | S_Result Result
   | S_Updated Updated
+  -- Errors
+  | S_Error ErrorMsg
   deriving (Eq, Show)
 
 instance ToJSON ServerMessage where
@@ -169,6 +178,7 @@ instance ToJSON ServerMessage where
       S_Ready     val -> msg "ready"     val
       S_Result    val -> msg "result"    val
       S_Updated   val -> msg "updated"   val
+      S_Error     val -> msg "error"     val
 
     where
       msg :: ToJSON a => Text -> a -> Value
