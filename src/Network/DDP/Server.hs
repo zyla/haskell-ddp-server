@@ -1,17 +1,25 @@
 module Network.DDP.Server where
 
-import Data.IORef
+import Control.Monad
+import Data.Maybe
 import Data.Text (Text)
 import qualified Data.HashMap.Strict as HM
 import Data.Aeson
-import Network.DDP.Protocol
+import Network.DDP.Protocol hiding (Connected)
+import qualified Network.DDP.Protocol as Protocol
+import Control.Concurrent
 import Control.Concurrent.STM
 
 type Unsubscribe = IO ()
 
+data DataEvent =
+    E_Added Added
+  | E_Changed Changed
+  | E_Removed Removed
+
 data Config = Config
   { callMethod :: Connection -> Text -> [Value] -> IO (Either Error Value)
-  , subscribe :: Connection -> Text -> [Value] -> IO Unsubscribe
+  , subscribe :: Connection -> Text -> [Value] -> (DataEvent -> IO ()) -> IO Unsubscribe
   }
 
 data Server = Server { server_config :: Config }
@@ -21,7 +29,7 @@ newServer = return . Server
 
 data Connection = Connection
   { connection_config :: Config
-  , connection_subs :: TVar ConnectionState
+  , connection_state :: TVar ConnectionState
   , connection_sendMessage :: ServerMessage -> IO ()
   }
 
@@ -38,20 +46,30 @@ newConnection server sendMessage  = do
     , connection_sendMessage = sendMessage
     }
 
+pass :: Applicative f => f ()
+pass = pure ()
+
 processMessage :: Connection -> ClientMessage -> IO ()
 processMessage conn@(Connection Config{callMethod,subscribe} stateVar _) msg = do
+  -- FIXME: RACE CONDITION: Two threads may C_Connect at the same time.
   state <- atomically $ readTVar stateVar
   case state of
     New -> case msg of
-      C_Connect{} ->
-        -- TODO connect
-        return ()
+      C_Connect{} -> do
+        -- TODO check versions
+        subsVar <- newTVarIO HM.empty
+        sendMessage conn $ S_Connected $ Protocol.Connected $ SessionId ""
+        atomically $ writeTVar stateVar $ Connected subsVar
 
       _ ->
         -- TODO: return "not connected" error
-        return ()
+        pass
 
     Connected subsVar -> case msg of
+
+      C_Connect{} ->
+        -- TODO error: already connected
+        pass
 
       C_Ping (Ping id) ->
         sendMessage conn (S_Pong (Pong id))
@@ -59,12 +77,19 @@ processMessage conn@(Connection Config{callMethod,subscribe} stateVar _) msg = d
       C_Pong {} ->
         -- Timeouts should be handled during receive,
         -- so 'pong' serves only as a dummy packet
-        return ()
+        pass
 
       C_Sub Sub{sub_id,sub_name,sub_params} -> do
-        unsub <- subscribe conn sub_name sub_params
+        let onEvent event = sendMessage conn (fromDataEvent event)
+            fromDataEvent = \case
+              E_Added   val -> S_Added val
+              E_Changed val -> S_Changed val
+              E_Removed val -> S_Removed val
+
+        unsub <- subscribe conn sub_name sub_params onEvent
         -- FIXME doesn't handle duplicate subId case
         atomically $ modifyTVar subsVar $ HM.insert sub_id unsub
+        sendMessage conn $ S_Ready $ Ready [sub_id]
 
       C_Unsub Unsub{unsub_id} -> do
 
@@ -78,7 +103,7 @@ processMessage conn@(Connection Config{callMethod,subscribe} stateVar _) msg = d
           Nothing ->
             -- The protocol doesn't have a reply to unsub message
             -- Maybe log a warning?
-            return ()
+            pass
 
           Just unsubscribe ->
             unsubscribe
@@ -92,7 +117,13 @@ sendMessage = connection_sendMessage
 
 debugConfig = Config callMethod subscribe
   where
-    callMethod _ _ _ = print "callMethod" >> return (Right (object []))
-    subscribe _ _ _ = print "subscribe" >> return (print "unsub")
+    callMethod _ method args = do
+      putStrLn $ "callMethod " ++ show method ++ " " ++ show args
+      return (Right (object []))
 
--- subscribe :: (Event -> IO ()) -> IO Unsubscribe
+    subscribe _ name args onEvent = do
+      putStrLn $ "subscribe " ++ show name ++ " " ++ show args
+      onEvent (E_Added $ Added "people" "id001" (object []))
+      tid <- forkIO $ threadDelay 5000000 >> onEvent (E_Removed $ Removed "people" "id001")
+      let unsubscribe = killThread tid >> print "unsub"
+      return unsubscribe
