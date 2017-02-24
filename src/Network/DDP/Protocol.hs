@@ -4,6 +4,7 @@ module Network.DDP.Protocol where
 import Control.Monad
 import Data.Text (Text)
 import qualified Data.HashMap.Strict as HM
+import Data.Hashable
 import Data.Aeson hiding (Result)
 
 import Network.DDP.Protocol.TH
@@ -11,10 +12,10 @@ import Network.DDP.Protocol.TH
 -- based on https://github.com/meteor/meteor/blob/7a4d6f66a0bb727ff20938479347415b1fa756a3/packages/ddp/DDP.md
 
 newtype SubId = SubId { unSubId :: Text }
-  deriving (Eq, Show, Ord, ToJSON, FromJSON)
+  deriving (Eq, Show, Ord, ToJSON, FromJSON, Hashable)
 
 newtype MethodCallId = MethodCallId { unMethodCallId :: Text }
-  deriving (Eq, Show, Ord, ToJSON, FromJSON)
+  deriving (Eq, Show, Ord, ToJSON, FromJSON, Hashable)
 
 newtype SessionId = SessionId { unSessionId :: Text }
   deriving (Eq, Show, Ord, ToJSON, FromJSON)
