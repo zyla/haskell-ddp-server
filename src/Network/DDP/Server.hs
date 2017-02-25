@@ -51,9 +51,6 @@ newConnection server sendMessage  = do
     , connection_sendMessage = sendMessage
     }
 
-pass :: Applicative f => f ()
-pass = pure ()
-
 processMessage :: Connection s -> ClientMessage -> IO ()
 processMessage (Connection Config{callMethod,subscribe,connect} stateVar sendMessage) msg = do
   -- FIXME: RACE CONDITION: Two threads may C_Connect at the same time.
@@ -67,6 +64,7 @@ processMessage (Connection Config{callMethod,subscribe,connect} stateVar sendMes
     New -> case msg of
       C_Connect{} -> do
         -- TODO check versions
+        -- TODO handle sessions
         subsVar <- newTVarIO HM.empty
         appState <- connect ConnectionInfo
         sendMessage $ S_Connected $ Protocol.Connected $ SessionId ""
@@ -76,7 +74,8 @@ processMessage (Connection Config{callMethod,subscribe,connect} stateVar sendMes
 
     Connected subsVar appState -> case msg of
 
-      C_Connect{} -> respondError "Already connected"
+      C_Connect{} ->
+        respondError "Already connected"
 
       C_Ping (Ping id) ->
         sendMessage (S_Pong (Pong id))
@@ -84,7 +83,7 @@ processMessage (Connection Config{callMethod,subscribe,connect} stateVar sendMes
       C_Pong {} ->
         -- Timeouts should be handled during receive,
         -- so 'pong' serves only as a dummy packet
-        pass
+        return ()
 
       C_Sub Sub{sub_id,sub_name,sub_params} -> do
         let onEvent event = sendMessage (fromDataEvent event)
@@ -93,10 +92,29 @@ processMessage (Connection Config{callMethod,subscribe,connect} stateVar sendMes
               E_Changed val -> S_Changed val
               E_Removed val -> S_Removed val
 
-        unsub <- subscribe appState sub_name sub_params onEvent
-        -- FIXME doesn't handle duplicate subId case
-        atomically $ modifyTVar subsVar $ HM.insert sub_id unsub
-        sendMessage $ S_Ready $ Ready [sub_id]
+        -- See Note [Duplicate subscription IDs]
+
+        -- TODO handle exceptions
+        unsubscribe <- subscribe appState sub_name sub_params onEvent
+
+        duplicate <- atomically $ do
+          subs <- readTVar subsVar
+          if HM.member sub_id subs
+            then
+              return True
+            else do
+              writeTVar subsVar $ HM.insert sub_id unsubscribe subs
+              return False
+
+        if duplicate
+          then do
+            -- cancel the subscription
+            unsubscribe -- TODO handle exceptions during unsubscribe
+
+            let error = Protocol.Error "duplicate_id" Nothing Nothing Nothing
+            sendMessage $ S_Nosub $ Nosub sub_id error
+          else
+            sendMessage $ S_Ready $ Ready [sub_id]
 
       C_Unsub Unsub{unsub_id} -> do
 
@@ -117,19 +135,28 @@ processMessage (Connection Config{callMethod,subscribe,connect} stateVar sendMes
         result <- callMethod appState method_method method_params
         sendMessage $ S_Result $ Result method_id result
 
+{-
 
-debugConfig = Config connect callMethod subscribe
-  where
+Note [Duplicate subscription IDs]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+With current API, there isn't a neat way to detect duplicate subscription IDs
+in a thread-safe manner without subscribing. Why?
+A solution would look like this:
+@
+ duplicate <- atomically $ do
+   subs <- readTVar subsVar
+   if HM.member sub_id subs
+     then
+       return True
+     else do
+       unsubscribe <- subscribe appState sub_name sub_params onEvent
+       write subsVar $ HM.insert sub_id unsub subs
+       return False
 
-    connect _ = putStrLn "connect"
+@
 
-    callMethod _ method args = do
-      putStrLn $ "callMethod " ++ show method ++ " " ++ show args
-      return (Right (object []))
+But 'subscribe' can't be embedded in STM.
 
-    subscribe _ name args onEvent = do
-      putStrLn $ "subscribe " ++ show name ++ " " ++ show args
-      onEvent (E_Added $ Added "people" "id001" (object []))
-      tid <- forkIO $ threadDelay 5000000 >> onEvent (E_Removed $ Removed "people" "id001")
-      let unsubscribe = killThread tid >> print "unsub"
-      return unsubscribe
+Another solution is to just say that 'processMessage' is not thread safe.
+
+-}

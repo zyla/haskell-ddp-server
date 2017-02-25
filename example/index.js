@@ -3,17 +3,19 @@
 const Asteroid = require('asteroid').createClass();
 const WebSocket = require('ws');
 
-console.log('siema');
+const endpoint = process.argv[2];
+if(!endpoint) {
+  console.error("Usage: node index.js <websocket url>");
+  process.exit(1);
+}
+
 // Connect to a Meteor backend
 const asteroid = new Asteroid({
-    endpoint: "ws://localhost:3008/websocket",
-SocketConstructor: WebSocket,
-    
+  endpoint: endpoint,
+  SocketConstructor: WebSocket,
 });
 
 asteroid.connect();
-
-console.log('created');
 
 // Use real-time collections
 asteroid.subscribe("tasksPublication");
@@ -26,8 +28,13 @@ asteroid.ddp.on("added", function(event) {
     console.log('added', event);
 });
 
-// Login
-//asteroid.loginWithPassword({username, email, password});
+asteroid.ddp.on("removed", function(event) {
+    console.log('removed', event);
+});
+
+asteroid.ddp.on("changed", function(event) {
+    console.log('changed', event);
+});
 
 // Call method and use promises
 asteroid.call("newUser")

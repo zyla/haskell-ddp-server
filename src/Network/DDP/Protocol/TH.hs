@@ -1,7 +1,6 @@
 -- | Helpers for deriving ToJSON and FromJSON instances.
 module Network.DDP.Protocol.TH (
-    deriveFromJSON
-  , deriveToJSON
+    deriveJSON
 ) where
 
 import Data.Char (isUpper, toLower)
@@ -26,8 +25,5 @@ jsonOptions = Aeson.defaultOptions
     { Aeson.fieldLabelModifier = fieldNameToJSON
     , Aeson.allNullaryToStringTag = True }
 
-deriveFromJSON :: Name -> Q [Dec]
-deriveFromJSON = Aeson.deriveFromJSON jsonOptions
-
-deriveToJSON :: Name -> Q [Dec]
-deriveToJSON = Aeson.deriveToJSON jsonOptions
+deriveJSON :: Name -> Q [Dec]
+deriveJSON = Aeson.deriveJSON jsonOptions

@@ -20,11 +20,15 @@ library
   default-extensions:  OverloadedStrings
                        LambdaCase
                        NamedFieldPuns
+                       TypeApplications
 
   ghc-options:         -Wincomplete-patterns
 
   exposed-modules:     Network.DDP.Server
+                       Network.DDP.Server.WebSocket
                        Network.DDP.Protocol
+
+  other-modules:       Network.DDP.Protocol.TH
 
   build-depends:       base >= 4.7 && < 5
                      , text
@@ -33,3 +37,20 @@ library
                      , unordered-containers
                      , hashable
                      , stm
+                     , websockets
+
+test-suite hspec-tests
+  type: exitcode-stdio-1.0
+  hs-source-dirs:      test
+  main-is:             Spec.hs
+  default-language:    Haskell2010
+  default-extensions:  OverloadedStrings
+                       LambdaCase
+                       NamedFieldPuns
+                       TypeApplications
+
+  build-depends:       base >= 4.7 && < 5
+                     , ddp-server
+                     , text
+                     , aeson
+                     , hspec

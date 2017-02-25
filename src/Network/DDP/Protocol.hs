@@ -5,7 +5,7 @@ import Control.Monad
 import Data.Text (Text)
 import qualified Data.HashMap.Strict as HM
 import Data.Hashable
-import Data.Aeson hiding (Result)
+import Data.Aeson as Aeson hiding (Result)
 
 import Network.DDP.Protocol.TH
 
@@ -30,8 +30,7 @@ data Error = Error
   , error_errorType :: Maybe Text
   } deriving (Eq, Show, Ord)
 
-deriveFromJSON ''Error
-deriveToJSON ''Error
+deriveJSON ''Error
 
 type CollectionName = Text
 type Id = Text
@@ -41,7 +40,7 @@ data Nosub = Nosub
   , nosub_error :: Error
   } deriving (Eq, Show)
 
-deriveToJSON ''Nosub
+deriveJSON ''Nosub
 
 data Added = Added
   { added_collection :: CollectionName
@@ -49,7 +48,7 @@ data Added = Added
   , added_fields :: Value
   } deriving (Eq, Show)
 
-deriveToJSON ''Added
+deriveJSON ''Added
 
 data Changed = Changed
   { changed_collection :: CollectionName
@@ -58,36 +57,37 @@ data Changed = Changed
   , changed_cleared :: [Text] -- ^ names of cleared fields
   } deriving (Eq, Show)
 
-deriveToJSON ''Changed
+deriveJSON ''Changed
 
 data Removed = Removed
   { removed_collection :: CollectionName
   , removed_id :: Id
   } deriving (Eq, Show)
 
-deriveToJSON ''Removed
+deriveJSON ''Removed
 
 data Ready = Ready
   { ready_subs :: [SubId]
   } deriving (Eq, Show)
 
-deriveToJSON ''Ready
+deriveJSON ''Ready
 
 data Sub = Sub
   { sub_id :: SubId
+    -- ^ identifier for unsubscribing
   , sub_name :: Text
-    -- ^ subscription name
+    -- ^ name of subscription handler
   , sub_params :: [Value]
     -- ^ extra parameters to the subscription handler
   } deriving (Eq, Show)
 
-deriveFromJSON ''Sub
+deriveJSON ''Sub
 
 data Unsub = Unsub
   { unsub_id :: SubId
   } deriving (Eq, Show)
 
-deriveFromJSON ''Unsub
+deriveJSON ''Unsub
 
 data Method = Method
   { method_method :: Text
@@ -97,53 +97,56 @@ data Method = Method
   , method_randomSeed :: Maybe Value
   } deriving (Eq, Show)
 
-deriveFromJSON ''Method
+deriveJSON ''Method
 
 data Result = Result
   { result_id :: MethodCallId
-  , result_result :: Either Error Value
+  , result_resultOrError :: Either Error Value
   } deriving (Eq, Show)
 
-deriveToJSON ''Result
+instance ToJSON Result where
+  toJSON (Result id resultOrError) =
+      Aeson.object [ "id" .= id, resultPair resultOrError ]
+    where
+      resultPair (Left err)  = "error" .= err
+      resultPair (Right val) = "result" .= val
 
 data Updated = Updated
   { updated_methods :: [MethodCallId]
   } deriving (Eq, Show)
 
-deriveToJSON ''Updated
+deriveJSON ''Updated
 
 data Ping = Ping
   { ping_id :: Text
   } deriving (Eq, Show)
 
-deriveFromJSON ''Ping
-deriveToJSON ''Ping
+deriveJSON ''Ping
 
 data Pong = Pong
   { pong_id :: Text
   } deriving (Eq, Show)
 
-deriveFromJSON ''Pong
-deriveToJSON ''Pong
+deriveJSON ''Pong
 
 data Connected = Connected
   { connected_session :: SessionId
   } deriving (Eq, Show)
 
-deriveToJSON ''Connected
+deriveJSON ''Connected
 
 data Failed = Failed
   { failed_version :: ProtocolVersion
   } deriving (Eq, Show)
 
-deriveToJSON ''Failed
+deriveJSON ''Failed
 
 data ErrorMsg = ErrorMsg
   { errormsg_reason :: Text
   , errormsg_offendingMessage :: Maybe Value
   } deriving (Eq, Show)
 
-deriveToJSON ''ErrorMsg
+deriveJSON ''ErrorMsg
 
 data ServerMessage =
   -- Handshake
@@ -194,7 +197,7 @@ data Connect = Connect
   , connect_support :: [ProtocolVersion]
   } deriving (Eq, Show)
 
-deriveFromJSON ''Connect
+deriveJSON ''Connect
 
 data ClientMessage =
   -- Handshake
@@ -210,7 +213,7 @@ data ClientMessage =
   deriving (Eq, Show)
 
 instance FromJSON ClientMessage where
-  parseJSON (Object obj) = do
+  parseJSON = withObject "message" $ \obj -> do
     typ <- obj .: "msg"
     case typ :: Text of
       "connect" -> C_Connect <$> parseJSON (Object obj)
@@ -219,6 +222,4 @@ instance FromJSON ClientMessage where
       "sub"     -> C_Sub     <$> parseJSON (Object obj)
       "unsub"   -> C_Unsub   <$> parseJSON (Object obj)
       "method"  -> C_Method  <$> parseJSON (Object obj)
-      _         -> mzero
-
-  parseJSON _ = mzero
+      _         -> fail $ "Unsupported message type: " ++ show typ
